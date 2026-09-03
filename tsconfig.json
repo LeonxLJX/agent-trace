@@ -1,13 +1,15 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "Node16",
-    "moduleResolution": "Node16",
-    "outDir": "dist",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "rootDir": "src",
-    "strict": true,
+    "outDir": "lib",
     "declaration": true,
-    "types": ["node"]
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true
   },
-  "include": ["src"]
+  "include": ["src/**/*"]
 }

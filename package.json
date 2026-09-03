@@ -1,26 +1,50 @@
 {
   "name": "agent-trace",
   "version": "0.1.0",
-  "description": "Trajectory debugger for LLM agents: record spans, replay runs, diff two attempts. Zero-dependency flame-chart viewer included.",
+  "description": "Harness-neutral observability for AI agent sessions — parse any agent log into one normalized event stream, see what the agent did, what it cost, and which tool calls hang or fail. CLI + self-contained HTML report.",
   "type": "module",
-  "main": "dist/recorder.js",
-  "bin": {
-    "agent-trace": "dist/cli.js"
-  },
-  "scripts": {
-    "build": "tsc",
-    "demo": "node dist/cli.js stats examples/sample-trace.json"
-  },
+  "license": "MIT",
   "keywords": [
-    "llm",
     "agent",
     "observability",
     "tracing",
-    "debugging"
+    "harness",
+    "claude-code",
+    "llm",
+    "ai-agents",
+    "token-cost",
+    "developer-tools",
+    "typescript"
   ],
-  "license": "MIT",
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "agent-trace": "./cli/index.mjs"
+  },
+  "files": [
+    "lib",
+    "cli",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test tests/trace.test.mjs",
+    "prepublishOnly": "npm run build"
+  },
   "devDependencies": {
-    "@types/node": "^26.4.1",
-    "typescript": "^7.0.2"
+    "@types/node": "^22.10.0",
+    "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=20.0.0"
   }
 }

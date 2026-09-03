@@ -1,59 +1,100 @@
 # agent-trace 🔍
 
-**A trajectory debugger for LLM agents — record every span, replay the run, diff two attempts.**
+**Observability for AI agent sessions — harness-neutral, zero-dep, offline.**
 
-Agents fail in ways that chat logs can't show: a tool call that burned 60% of
-your tokens, a retry loop hiding inside a "successful" run, a step ordering
-that only breaks on certain inputs. agent-trace records each run as a span
-tree (LLM calls, tool calls, token counts, status) and gives you two ways to
-see it: a **flame-chart viewer** with replay animation, and a **diff mode**
-that puts two runs side by side.
+Every agent harness logs what it does, and every log format is different — so almost nobody actually inspects their sessions. `agent-trace` normalizes any agent log (JSONL with recognizable fields: Claude Code sessions, OpenAI-style usage, custom loops) into **one event stream**, then answers the questions that matter:
 
-## The 10-second demo
+- **What did the agent do?** — chronological timeline, tool-call→result pairing, dangling-call detection (the "hangs forever" class of bug)
+- **What did it cost?** — per-model token accounting with a built-in USD price table, prefix-matched to dated model names
+- **Where did it burn time?** — slowest calls, per-tool usage histogram
+- **What failed?** — error events and failed tool results, marked in-line
 
-Open `viewer/index.html` in a browser — zero dependencies, zero build:
+```console
+$ agent-trace stats session.jsonl
+session: (unnamed)
+  events      5 (1 llm · 1 tool · 2 errors · 1 dangling)
+  wall clock  1m0s
+  tokens      5,000 in / 300 out
+  est. cost   $0.008
+  tools:
+       1  edit_file
+```
+
+## Install
 
 ```bash
-# option 1: just open the viewer and load the bundled sample trace
-# option 2: from the CLI
-npm install && npm run build
-node dist/cli.js view examples/sample-trace.json
-node dist/cli.js stats examples/sample-trace.json   # terminal flame chart
-node dist/cli.js diff run-a.json run-b.json         # what changed between two runs
+npm install agent-trace      # library
+npx agent-trace models       # CLI: show the built-in price table
 ```
 
-## What the viewer shows
+## CLI
 
-- **Metric cards** — total elapsed, steps, tokens, cost (per-model pricing table), failure count
-- **Flame-chart timeline** — LLM spans in blue, tool spans in teal, errors in red, retries in amber; bar height = token share, so the expensive step is instantly visible
-- **Replay** — press ▶ and watch the run unfold in real time (1x / 2x / 4x), exactly as the agent experienced it
-- **Compare** — toggle a baseline trace; diverging steps are highlighted
-- **Click any span** — full input/output/error payload in the detail panel
+```bash
+agent-trace stats session.jsonl             # aggregate numbers
+agent-trace timeline session.jsonl -n 100   # chronological one-liners
+agent-trace report session.jsonl -o out.html  # self-contained HTML report (no CDN, works offline)
+agent-trace models                          # USD per 1M tokens, built-in table
+```
 
-## Recording is one wrapper call
+## Library
 
 ```ts
-import { TraceRecorder } from 'agent-trace';
+import { parseFile, analyzeSession, pairCalls, timeline, renderHtml, DEFAULT_PRICES } from 'agent-trace'
 
-const trace = new TraceRecorder({ agent: 'codefix-agent', model: 'deepseek-chat' });
+const { events, skipped } = await parseFile('session.jsonl')
 
-await trace.track('planner', 'llm', () => callModel(prompt), { tokens: { in: 812, out: 203 } });
-await trace.track('run-tests', 'tool', () => bash('npm test'));
+const stats = analyzeSession(events)
+stats.estimatedCostUsd   // 0.008
+stats.dangling           // tool calls that never returned — your hangs
+stats.byTool             // { edit_file: 4, bash: 12 }
+stats.slowest            // [{ label: 'run full test suite', durationMs: 48000 }]
 
-trace.save('trace.json');
+// call→result pairing (by callId, with name-order fallback)
+const nodes = pairCalls(events).filter((n) => n.dangling)
+
+// write the report
+import fs from 'node:fs'
+fs.writeFileSync('report.html', renderHtml(events, stats, 'my session'))
 ```
 
-`track()` times the call, catches errors, records status — you don't
-instrument anything twice. The JSON it produces is the interchange format:
-the viewer, the CLI, and harness-live all speak it.
+## What it parses
 
-## Why this exists
+The generic JSONL adapter maps common field aliases onto the normalized event:
 
-If you build agents for a living, "it failed somewhere" is not a debuggable
-statement. Trace-first debugging — spans, replay, diffing two attempts — is
-how the infrastructure teams behind serious agent products actually work.
-agent-trace is that workflow, in a dependency you can read in an afternoon.
+| normalized | accepted aliases |
+|---|---|
+| `type` | `type`, `event`, `kind`, `role` (+ aliases: `tool_use`→`tool_call`, `observation`→`tool_result`, `completion`/`assistant`→`llm_call`, …) |
+| `ts` | `ts`, `time`, `timestamp`, `created_at` — epoch seconds, epoch ms, or ISO strings |
+| `tokensIn/tokensOut` | `usage.input_tokens` / `usage.prompt_tokens`, `output_tokens` / `completion_tokens`, and top-level variants |
+| `tool` | `tool`, `tool_name`, `function`, `name` |
+| `callId` | `call_id`, `tool_use_id`, `id`, `item_id` |
+| `durationMs` | `duration_ms`, `durationMs`, `duration`, `latency_ms` |
+| `ok` | `ok`, `success`, `is_error` (inverted) |
 
-Part of an Agent-infra toolkit: **agent-trace** (observe runs) · **[mcpscope](https://github.com/LeonxLJX/mcpscope)** (audit tools) · **[harness-live](https://github.com/LeonxLJX/harness-live)** (run + watch).
+Unparseable lines are skipped and counted — agent logs always contain some.
+
+## Cost model
+
+Built-in prices (USD per 1M tokens, Sept 2026): Claude Sonnet 4.5 ($3/$15), Opus 4.1 ($15/$75), Haiku 4 ($1/$5), GPT-5.2 ($1.25/$10), GPT-5.2-mini ($0.25/$2), GPT-4.1 ($2/$8), DeepSeek Chat ($0.27/$1.10), DeepSeek Reasoner ($0.55/$2.19).
+
+Model names match by exact key or prefix, so `claude-haiku-4-20260101` picks up the Haiku row. Unknown models cost $0 (visible in the report, not silently wrong). Override anything:
+
+```ts
+analyzeSession(events, { ...DEFAULT_PRICES, 'my-finetune': { input: 0.5, output: 1.5 } })
+```
+
+## The HTML report
+
+One file, inline CSS, no CDN, no JS framework — open it offline, send it in a PR, archive it with the session. Cost cards, token bars per model (in blue / out green), tool histogram, slowest calls, full timeline with failures marked.
+
+## Development
+
+```bash
+npm install && npm test    # build + 11 tests, zero runtime deps
+```
+
+Node ≥ 20.
+
+## License
 
 MIT
