@@ -1,0 +1,26 @@
+{
+  "name": "agent-trace",
+  "version": "0.1.0",
+  "description": "Trajectory debugger for LLM agents: record spans, replay runs, diff two attempts. Zero-dependency flame-chart viewer included.",
+  "type": "module",
+  "main": "dist/recorder.js",
+  "bin": {
+    "agent-trace": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "demo": "node dist/cli.js stats examples/sample-trace.json"
+  },
+  "keywords": [
+    "llm",
+    "agent",
+    "observability",
+    "tracing",
+    "debugging"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^26.4.1",
+    "typescript": "^7.0.2"
+  }
+}
