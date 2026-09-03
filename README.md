@@ -114,6 +114,16 @@ npm install && npm test    # build + 11 tests, zero runtime deps
 
 Node ≥ 20.
 
+
+## Related
+
+同一批「给 AI 编码代理补基础设施」的项目：
+
+- [codegraph-memory](https://github.com/LeonxLJX/codegraph-memory) — coding agent 本地代码记忆
+- [prompt-forge](https://github.com/LeonxLJX/prompt-forge) — 提示词模板引擎
+- [design-specs-web](https://github.com/LeonxLJX/design-specs-web) — 中文 UI 库 DESIGN.md 规范包
+- [web-engineer-skills](https://github.com/LeonxLJX/web-engineer-skills) — 前端工程 Agent 技能库
+
 ## License
 
 MIT
