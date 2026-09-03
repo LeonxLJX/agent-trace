@@ -1,5 +1,4 @@
 import fs from 'node:fs'
-import readline from 'node:readline'
 import type { EventType, TraceEvent } from './types.js'
 
 /**
@@ -46,12 +45,62 @@ function toIso(ts: unknown): string {
 function tokens(obj: Record<string, unknown>): { tokensIn?: number; tokensOut?: number } {
   const usage = pick(obj, ['usage', 'token_usage', 'tokens', 'metrics']) as Record<string, unknown> | undefined
   const src = (usage && typeof usage === 'object' ? usage : obj) as Record<string, unknown>
-  const tin = pick(src, ['input_tokens', 'prompt_tokens', 'tokens_in', 'inputTokens'])
-  const tout = pick(src, ['output_tokens', 'completion_tokens', 'tokens_out', 'outputTokens'])
+  const tin = pick(src, ['input_tokens', 'prompt_tokens', 'tokens_in', 'inputTokens', 'in'])
+  const tout = pick(src, ['output_tokens', 'completion_tokens', 'tokens_out', 'outputTokens', 'out'])
   return {
     tokensIn: typeof tin === 'number' ? tin : undefined,
     tokensOut: typeof tout === 'number' ? tout : undefined,
   }
+}
+
+/**
+ * Trajectory/span format — a single JSON doc with a top-level `spans` array
+ * and a `startedAt` anchor. Each span is a call (llm or tool) with relative
+ * `startMs`/`endMs`, `tokens.{in,out}` and a `status`. Tools emit BOTH a
+ * tool_call and a tool_result so pairing and dangling detection work.
+ */
+export function expandTrajectory(obj: Record<string, unknown>, line?: number): TraceEvent[] {
+  const spans = obj.spans
+  if (!Array.isArray(spans)) return []
+  const startedAt = toIso(obj.startedAt)
+  const base = typeof obj.startedAt === 'string' ? Date.parse(String(obj.startedAt)) : Date.now()
+  const model = obj.model as string | undefined
+  const session = (obj.runId ?? obj.session ?? obj.agent) as string | undefined
+  const out: TraceEvent[] = []
+  for (const span of spans) {
+    if (typeof span !== 'object' || span == null) continue
+    const s = span as Record<string, unknown>
+    const kind = String(s.kind ?? '').toLowerCase()
+    const name = (s.name as string) ?? (s.tool as string) ?? 'span'
+    const startMs = typeof s.startMs === 'number' ? s.startMs : 0
+    const endMs = typeof s.endMs === 'number' ? s.endMs : startMs
+    const { tokensIn, tokensOut } = tokens(s)
+    const status = String(s.status ?? '').toLowerCase()
+    const ok = status === 'ok' || status === 'success' || status === ''
+    const ts = new Date(base + startMs).toISOString()
+    const dur = Math.max(0, endMs - startMs)
+    const callId = (s.id as string) ?? String(line ?? 0)
+    const label = String(s.input ?? name).slice(0, 120)
+    if (kind === 'llm') {
+      out.push({ ts, type: 'llm_call', session, model, label, durationMs: dur, tokensIn, tokensOut, data: s, line, ok })
+    } else if (kind === 'tool') {
+      const tool = (s.tool as string) ?? name
+      out.push({ ts, type: 'tool_call', session, tool, callId, label, durationMs: dur, data: s, line, ok })
+      out.push({
+        ts: new Date(base + endMs).toISOString(),
+        type: 'tool_result', session, tool, callId, label: String(s.output ?? name).slice(0, 120),
+        durationMs: dur, ok, data: s, line,
+      })
+    } else if (kind === 'error' || status === 'error' || status === 'failed') {
+      out.push({ ts, type: 'error', session, label, durationMs: dur, data: s, line, ok: false })
+    }
+  }
+  return out
+}
+
+/** True when the parsed object is a trajectory (has a `spans` array). */
+export function isTrajectory(obj: Record<string, unknown>): boolean {
+  return Array.isArray(obj.spans)
 }
 
 /** Normalize one parsed log object into a TraceEvent (or null if unusable). */
@@ -83,6 +132,22 @@ export function normalizeObject(obj: Record<string, unknown>, line?: number): Tr
 
 /** Parse JSONL text (string) into events. Skips unparseable lines, keeps count. */
 export function parseJsonl(text: string): { events: TraceEvent[]; skipped: number } {
+  // Fast path: the whole input is a single JSON document (e.g. a pretty-printed
+  // trajectory or one normalized event). Detect before falling back to line mode.
+  const whole = text.trim()
+  if (whole) {
+    try {
+      const obj = JSON.parse(whole)
+      if (!Array.isArray(obj) && typeof obj === 'object') {
+        if (isTrajectory(obj as Record<string, unknown>)) return { events: expandTrajectory(obj as Record<string, unknown>), skipped: 0 }
+        const ev = normalizeObject(obj as Record<string, unknown>)
+        return { events: ev ? [ev] : [], skipped: ev ? 0 : 1 }
+      }
+    } catch {
+      /* not a single doc — fall through to line mode */
+    }
+  }
+
   const events: TraceEvent[] = []
   let skipped = 0
   for (const [i, rawLine] of text.split(/\r?\n/).entries()) {
@@ -94,9 +159,13 @@ export function parseJsonl(text: string): { events: TraceEvent[]; skipped: numbe
         skipped++
         continue
       }
-      const ev = normalizeObject(obj as Record<string, unknown>, i + 1)
-      if (ev) events.push(ev)
-      else skipped++
+      if (isTrajectory(obj as Record<string, unknown>)) {
+        events.push(...expandTrajectory(obj as Record<string, unknown>, i + 1))
+      } else {
+        const ev = normalizeObject(obj as Record<string, unknown>, i + 1)
+        if (ev) events.push(ev)
+        else skipped++
+      }
     } catch {
       skipped++
     }
@@ -104,25 +173,8 @@ export function parseJsonl(text: string): { events: TraceEvent[]; skipped: numbe
   return { events, skipped }
 }
 
-/** Stream-parse a JSONL file (memory-friendly for big logs). */
+/** Parse a trace file — handles both JSONL and single-document JSON. */
 export async function parseFile(path: string): Promise<{ events: TraceEvent[]; skipped: number }> {
-  const rl = readline.createInterface({ input: fs.createReadStream(path, 'utf8'), crlfDelay: Infinity })
-  const events: TraceEvent[] = []
-  let skipped = 0
-  let n = 0
-  for await (const rawLine of rl) {
-    n++
-    const lineText = rawLine.trim()
-    if (!lineText || lineText.startsWith('//') || lineText.startsWith('#')) continue
-    try {
-      const obj = JSON.parse(lineText)
-      if (Array.isArray(obj)) { skipped++; continue }
-      const ev = normalizeObject(obj as Record<string, unknown>, n)
-      if (ev) events.push(ev)
-      else skipped++
-    } catch {
-      skipped++
-    }
-  }
-  return { events, skipped }
+  const text = await fs.promises.readFile(path, 'utf8')
+  return parseJsonl(text)
 }

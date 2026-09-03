@@ -110,6 +110,60 @@ test('fmtCost formats sensibly', () => {
   assert.equal(fmtCost(12.5), '$12.50')
 })
 
+test('parseJsonl expands trajectory/span format', () => {
+  const doc = {
+    runId: 'run_1', agent: 'codefix-agent', model: 'deepseek-chat', startedAt: '2026-09-03T14:02:11Z',
+    spans: [
+      { id: 's1', name: 'planner', kind: 'llm', startMs: 0, endMs: 2100, tokens: { in: 1240, out: 180 }, status: 'ok' },
+      { id: 's2', name: 'read_file', kind: 'tool', tool: 'read_file', startMs: 2100, endMs: 2350, tokens: { in: 0, out: 0 }, status: 'ok' },
+      { id: 's3', name: 'bash: npm test', kind: 'tool', tool: 'bash', startMs: 2350, endMs: 4000, tokens: { in: 0, out: 0 }, status: 'error', error: 'test failed' },
+    ],
+  }
+  const { events, skipped } = parseJsonl(JSON.stringify(doc))
+  assert.equal(skipped, 0)
+  const llm = events.filter((e) => e.type === 'llm_call')
+  const calls = events.filter((e) => e.type === 'tool_call')
+  const results = events.filter((e) => e.type === 'tool_result')
+  assert.equal(llm.length, 1)
+  assert.equal(llm[0].tokensIn, 1240)
+  assert.equal(llm[0].model, 'deepseek-chat')
+  assert.equal(calls.length, 2)
+  assert.equal(results.length, 2)
+  // failed tool result flagged
+  assert.ok(results.some((r) => r.ok === false && r.callId === 's3'))
+  // timestamps are anchored to startedAt + startMs
+  assert.equal(new Date(llm[0].ts).toISOString(), '2026-09-03T14:02:11.000Z')
+})
+
+test('analyzeSession on trajectory finds errors and dangling', () => {
+  const doc = {
+    startedAt: '2026-09-03T14:00:00Z', model: 'deepseek-chat',
+    spans: [
+      { id: 'a', name: 'edit', kind: 'tool', tool: 'edit_file', startMs: 0, endMs: 100, status: 'ok' },
+      { id: 'b', name: 'run', kind: 'tool', tool: 'bash', startMs: 100, endMs: 200, status: 'error', error: 'boom' },
+    ],
+  }
+  const { events } = parseJsonl(JSON.stringify(doc))
+  const s = analyzeSession(events)
+  assert.equal(s.errors, 1)
+  assert.equal(s.toolCalls, 2)
+  assert.equal(s.dangling, 0)
+})
+
+test('parseJsonl handles the bundled example without skipping', async () => {
+  const fs = await import('node:fs')
+  const raw = fs.readFileSync(new URL('../examples/sample-trace.json', import.meta.url), 'utf8')
+  const { events, skipped } = parseJsonl(raw)
+  assert.equal(skipped, 0)
+  assert.ok(events.length >= 20)
+  const s = analyzeSession(events)
+  assert.equal(s.llmCalls, 6)
+  assert.equal(s.toolCalls, 7)
+  assert.equal(s.errors, 1)
+  assert.ok(s.estimatedCostUsd > 0)
+  assert.equal(s.dangling, 0)
+})
+
 test('renderHtml produces a self-contained report', () => {
   const events = [base({ type: 'llm_call', model: 'gpt-5.2', tokensIn: 1000, tokensOut: 50, label: 'call' })]
   const s = analyzeSession(events)

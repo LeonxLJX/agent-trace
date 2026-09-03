@@ -57,9 +57,26 @@ import fs from 'node:fs'
 fs.writeFileSync('report.html', renderHtml(events, stats, 'my session'))
 ```
 
+```bash
+agent-trace stats examples/sample-trace.json     # the bundled trajectory example
+agent-trace report examples/sample-trace.json -o out.html
+```
+
+## The trajectory viewer
+
+`viewer/index.html` is a standalone, offline trajectory viewer — open it in a browser, load `examples/sample-trace.json` (or any span-format trace), and you get cost cards, a token breakdown, a per-span timeline with status coloring, and hover details. No build step, no CDN, no dependencies.
+
+```bash
+# quick look without installing anything:
+python -m http.server 8000
+open http://localhost:8000/viewer/     # then drag in examples/sample-trace.json
+```
+
 ## What it parses
 
-The generic JSONL adapter maps common field aliases onto the normalized event:
+The parser accepts two shapes and normalizes both to the same event stream:
+
+**1. Line-delimited JSONL / single normalized events** — the generic adapter maps common field aliases:
 
 | normalized | accepted aliases |
 |---|---|
@@ -70,6 +87,8 @@ The generic JSONL adapter maps common field aliases onto the normalized event:
 | `callId` | `call_id`, `tool_use_id`, `id`, `item_id` |
 | `durationMs` | `duration_ms`, `durationMs`, `duration`, `latency_ms` |
 | `ok` | `ok`, `success`, `is_error` (inverted) |
+
+**2. Trajectory / span format** — a single JSON document with `runId` / `agent` / `model` / `startedAt` and a `spans` array (each span: `kind: "llm" | "tool"`, `name`, `tool`, relative `startMs`/`endMs`, `tokens.{in,out}`, `status`). Tool spans expand into a `tool_call` + `tool_result` pair so pairing, error detection, and dangling-call analysis all work. This is what `examples/sample-trace.json` uses.
 
 Unparseable lines are skipped and counted — agent logs always contain some.
 
