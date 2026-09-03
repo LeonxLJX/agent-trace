@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>agent-trace · trajectory viewer</title>
+<style>
+:root{
+  --bg:#0d1117; --panel:#161b22; --panel2:#1c2128; --line:#30363d;
+  --tx:#e6edf3; --tx2:#9198a1; --tx3:#6e7681;
+  --llm:#3b82f6; --tool:#14b8a6; --err:#ef4444; --warn:#f59e0b; --ok:#22c55e;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);
+  font:13px/1.6 ui-sans-serif,-apple-system,"Segoe UI",Inter,sans-serif}
+.wrap{max-width:1280px;margin:0 auto;padding:22px 24px 60px}
+h1{font-size:17px;font-weight:600;margin:0;letter-spacing:-.2px}
+h1 span{color:var(--tool);font-weight:500}
+.sub{color:var(--tx2);font-size:12px;margin:4px 0 0}
+.sub code{background:var(--panel2);padding:1px 6px;border-radius:4px;color:var(--tx)}
+
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:10px;margin:18px 0 14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:11px 13px}
+.card .k{font-size:11px;color:var(--tx3);text-transform:uppercase;letter-spacing:.5px}
+.card .v{font-size:21px;font-weight:600;margin-top:3px;font-variant-numeric:tabular-nums}
+.card .u{font-size:11px;color:var(--tx3);margin-left:2px;font-weight:400}
+.card.hot .v{color:var(--err)}
+
+.ctrl{display:flex;align-items:center;gap:9px;background:var(--panel);
+  border:1px solid var(--line);border-radius:9px;padding:9px 12px;margin-bottom:14px;flex-wrap:wrap}
+button{background:var(--panel2);color:var(--tx);border:1px solid var(--line);
+  border-radius:7px;padding:6px 13px;font-size:12px;cursor:pointer;font-family:inherit}
+button:hover{border-color:#484f58;background:#22272e}
+button.pri{background:var(--llm);border-color:var(--llm);color:#fff;font-weight:500}
+button.pri:hover{background:#2563eb}
+.tgl{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--tx2);cursor:pointer;user-select:none}
+.tgl input{accent-color:var(--tool);cursor:pointer}
+.sep{width:1px;height:20px;background:var(--line)}
+.speed{display:flex;gap:3px}
+.speed button{padding:4px 9px;font-size:11px}
+.speed button.on{background:var(--tool);border-color:var(--tool);color:#04211d;font-weight:600}
+.prog{flex:1;min-width:120px;height:5px;background:var(--panel2);
+  border-radius:3px;overflow:hidden;margin:0 4px}
+.prog i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--llm),var(--tool));border-radius:3px}
+.clock{font-size:12px;color:var(--tx2);font-variant-numeric:tabular-nums;min-width:92px;text-align:right}
+
+.main{display:grid;grid-template-columns:1fr 380px;gap:14px}
+@media(max-width:980px){.main{grid-template-columns:1fr}}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:13px 15px}
+.box h2{font-size:11px;font-weight:600;color:var(--tx3);text-transform:uppercase;
+  letter-spacing:.6px;margin:0 0 11px}
+
+.tl{position:relative}
+.ruler{display:flex;justify-content:space-between;font-size:10px;color:var(--tx3);
+  margin-bottom:6px;font-variant-numeric:tabular-nums}
+.row{position:relative;height:26px;margin-bottom:3px}
+.track{position:absolute;inset:0;background:var(--panel2);border-radius:4px;opacity:.45}
+.bar{position:absolute;top:0;height:100%;border-radius:4px;cursor:pointer;
+  display:flex;align-items:center;overflow:hidden;transition:opacity .12s,transform .12s;
+  border:1px solid transparent}
+.bar:hover{transform:translateY(-1px);border-color:#fff6}
+.bar.llm{background:linear-gradient(90deg,#1d4ed8,#3b82f6)}
+.bar.tool{background:linear-gradient(90deg,#0d9488,#14b8a6)}
+.bar.err{background:linear-gradient(90deg,#b91c1c,#ef4444)}
+.bar.warn{background:linear-gradient(90deg,#b45309,#f59e0b)}
+.bar .lb{font-size:10px;padding:0 7px;white-space:nowrap;color:#fff;font-weight:500;
+  text-shadow:0 1px 2px rgba(0,0,0,.5)}
+.bar.dim{opacity:.13}
+.bar.cur{box-shadow:0 0 0 2px #fff,0 0 14px rgba(255,255,255,.35);z-index:3}
+.bar.sel{box-shadow:0 0 0 2px var(--tool);z-index:2}
+.bar.bad{border:1px dashed #f88}
+.bar .tk{position:absolute;left:0;bottom:0;height:2px;background:#fff5;opacity:.8}
+.cursor{position:absolute;top:-4px;bottom:-4px;width:2px;background:#fff;
+  box-shadow:0 0 10px #fff9;z-index:5;pointer-events:none}
+
+.legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:13px;font-size:11px;color:var(--tx2)}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+
+#detail{position:sticky;top:14px}
+.dh{display:flex;align-items:center;gap:8px;margin-bottom:9px;flex-wrap:wrap}
+.pill{font-size:10px;padding:2px 8px;border-radius:20px;font-weight:600;letter-spacing:.3px}
+.pill.llm{background:#1e3a8a;color:#93c5fd}
+.pill.tool{background:#134e4a;color:#5eead4}
+.pill.err{background:#7f1d1d;color:#fca5a5}
+.dname{font-size:14px;font-weight:600}
+.dmeta{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0 12px}
+.dm{background:var(--panel2);border-radius:6px;padding:7px 9px}
+.dm .k{font-size:10px;color:var(--tx3);text-transform:uppercase;letter-spacing:.4px}
+.dm .v{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;margin-top:1px}
+.lbl{font-size:10px;color:var(--tx3);text-transform:uppercase;letter-spacing:.5px;margin:11px 0 4px}
+pre{background:#010409;border:1px solid var(--line);border-radius:6px;padding:9px 11px;
+  font:11px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace;color:#c9d1d9;
+  white-space:pre-wrap;word-break:break-word;margin:0;max-height:190px;overflow:auto}
+pre.err{border-color:#7f1d1d;color:#fca5a5}
+.empty{color:var(--tx3);font-size:12px;text-align:center;padding:36px 0}
+.foot{margin-top:22px;color:var(--tx3);font-size:11px;text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>agent-trace <span>· trajectory viewer</span></h1>
+<p class="sub" id="meta"></p>
+
+<div class="cards" id="cards"></div>
+
+<div class="ctrl">
+  <button class="pri" id="play">▶ Replay</button>
+  <button id="reset">Reset</button>
+  <div class="sep"></div>
+  <div class="speed" id="speed"></div>
+  <div class="sep"></div>
+  <label class="tgl"><input type="checkbox" id="cmpx"> Compare with baseline</label>
+  <div class="prog"><i id="pbar"></i></div>
+  <div class="clock" id="clock">0.00s / 0.00s</div>
+</div>
+
+<div class="main">
+  <div class="box">
+    <h2>Trajectory · 时间线</h2>
+    <div class="tl">
+      <div class="ruler" id="ruler"></div>
+      <div id="rows" style="position:relative"></div>
+      <div class="cursor" id="cursor" style="left:0;display:none"></div>
+    </div>
+    <div class="legend">
+      <span><i style="background:var(--llm)"></i>LLM call</span>
+      <span><i style="background:var(--tool)"></i>Tool call</span>
+      <span><i style="background:var(--err)"></i>Failed</span>
+      <span><i style="background:var(--warn)"></i>Retry / re-plan</span>
+      <span><i style="background:#ffffff44"></i>bar height = token share</span>
+    </div>
+  </div>
+
+  <div class="box" id="detail">
+    <h2>Span detail</h2>
+    <div id="dbody"><div class="empty">点击任意 span，或按 Replay 开始回放</div></div>
+  </div>
+</div>
+
+<div class="foot">agent-trace · zero-dependency viewer · drop in your own trace with <code>?trace=your.json</code></div>
+</div>
+
+<script>
+const DEFAULT_TRACE = {
+  runId:"run_7f3a91c2", agent:"codefix-agent", model:"deepseek-chat",
+  task:"Fix failing test: token refresh returns 401 after 15min idle",
+  totalMs:33400, pricing:{inputPerMTok:0.27, outputPerMTok:1.10},
+  spans:[
+    {id:"s1",name:"planner",kind:"llm",startMs:0,endMs:2100,tokens:{in:1240,out:180},status:"ok",
+     input:"Test `token refresh` fails with 401 after 15min idle. Repo has src/auth.ts and src/token.ts. Plan the investigation.",
+     output:"Hypothesis: refresh token TTL is shorter than the access token TTL, so after idle the refresh token has already expired. Step 1: read src/token.ts to confirm TTL constants.",error:null},
+    {id:"s2",name:"read_file",kind:"tool",tool:"read_file",startMs:2100,endMs:2350,tokens:{in:0,out:0},status:"ok",
+     input:'{"path":"src/token.ts"}',
+     output:"128 lines read. Found REFRESH_TTL_MS = 15 * 60 * 1000 and ACCESS_TTL_MS = 30 * 60 * 1000.",error:null},
+    {id:"s3",name:"analyze",kind:"llm",startMs:2350,endMs:5200,tokens:{in:2100,out:420},status:"ok",
+     input:"src/token.ts contents + failing test output.",
+     output:"Confirmed: refresh TTL (15m) < access TTL (30m). Any idle longer than 15m makes the refresh token unusable. Fix: raise REFRESH_TTL_MS and make it derive from ACCESS_TTL_MS rather than being an independent literal.",error:null},
+    {id:"s4",name:"read_file",kind:"tool",tool:"read_file",startMs:5200,endMs:5480,tokens:{in:0,out:0},status:"ok",
+     input:'{"path":"src/auth.ts"}',
+     output:"94 lines read. auth.ts calls refreshToken() with its own hardcoded 900000 timeout.",error:null},
+    {id:"s5",name:"locate",kind:"llm",startMs:5480,endMs:8900,tokens:{in:3400,out:260},status:"ok",
+     input:"Both files + test expectations.",
+     output:"Two edit sites: (1) src/token.ts REFRESH_TTL_MS constant, (2) src/auth.ts hardcoded 900000. Editing only the first will not fix the test.",error:null},
+    {id:"s6",name:"str_replace",kind:"tool",tool:"str_replace",startMs:8900,endMs:9300,tokens:{in:0,out:0},status:"ok",
+     input:"src/token.ts: REFRESH_TTL_MS = 15 * 60 * 1000  ->  REFRESH_TTL_MS = ACCESS_TTL_MS * 2",
+     output:"Patched 1 occurrence.",error:null},
+    {id:"s7",name:"bash: npm test",kind:"tool",tool:"bash",startMs:9300,endMs:14800,tokens:{in:0,out:0},status:"error",
+     input:"npm test -- token",
+     output:"FAIL src/token.test.ts\n  ● refresh after idle\n    expected 200, received 401\n    1 failed, 12 passed",
+     error:"test_failed: 1 failed, 12 passed"},
+    {id:"s8",name:"re-analyze",kind:"llm",startMs:14800,endMs:19200,tokens:{in:4200,out:380},status:"ok",
+     input:"Test failure output + current diff.",
+     output:"The constant fix was correct but src/auth.ts still enforces its own 900000 ms timeout, so the request aborts before refresh completes. Need the second edit.",error:null},
+    {id:"s9",name:"grep",kind:"tool",tool:"grep",startMs:19200,endMs:19500,tokens:{in:0,out:0},status:"ok",
+     input:"grep -rn '900000' src/",
+     output:"src/auth.ts:47:  const REFRESH_TIMEOUT = 900000;\nsrc/auth.ts:88:    timeout: 900000,",error:null},
+    {id:"s10",name:"find-second-site",kind:"llm",startMs:19500,endMs:23800,tokens:{in:5600,out:210},status:"ok",
+     input:"grep results + both file contents.",
+     output:"Both occurrences in auth.ts must import the shared constant instead of redeclaring it. Otherwise the next TTL change reintroduces this exact bug.",error:null},
+    {id:"s11",name:"str_replace",kind:"tool",tool:"str_replace",startMs:23800,endMs:24150,tokens:{in:0,out:0},status:"ok",
+     input:"src/auth.ts: replace both 900000 literals with imported REFRESH_TTL_MS",
+     output:"Patched 2 occurrences.",error:null},
+    {id:"s12",name:"bash: npm test",kind:"tool",tool:"bash",startMs:24150,endMs:30200,tokens:{in:0,out:0},status:"ok",
+     input:"npm test -- token",
+     output:"PASS src/token.test.ts\n  13 passed",error:null},
+    {id:"s13",name:"summarize",kind:"llm",startMs:30200,endMs:33400,tokens:{in:6800,out:340},status:"ok",
+     input:"Full trajectory + final diff.",
+     output:"Root cause: refresh TTL was defined independently of access TTL and drifted below it, so any idle beyond 15m expired the refresh token. Fixed by deriving REFRESH_TTL_MS from ACCESS_TTL_MS and removing the duplicate literal in auth.ts.",error:null}
+  ]
+};
+
+const BASELINE = {
+  totalMs: 41200, spans: DEFAULT_TRACE.spans.map((s,i)=>({
+    ...s,
+    startMs: Math.round(s.startMs*1.24 + (i>6?900:0)),
+    endMs: Math.round(s.endMs*1.24 + (i>6?1600:0)),
+    tokens: s.kind==='llm' ? {in:Math.round(s.tokens.in*1.35), out:s.tokens.out} : s.tokens
+  }))
+};
+
+let TRACE = DEFAULT_TRACE;
+let t = 0, playing = false, speed = 1, sel = null, cmpx = false, raf = null, last = 0;
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const fmtS = ms => (ms/1000).toFixed(2)+'s';
+const fmtN = n => n>=1000 ? (n/1000).toFixed(1)+'k' : String(n);
+const cls = s => s.status==='error' ? 'err' : (s.kind==='llm' ? 'llm' : 'tool');
+const dur = s => s.endMs - s.startMs;
+
+function metrics(upto){
+  const done = TRACE.spans.filter(s => s.endMs <= upto);
+  const tokIn = done.reduce((a,s)=>a+s.tokens.in,0);
+  const tokOut = done.reduce((a,s)=>a+s.tokens.out,0);
+  const p = TRACE.pricing || {inputPerMTok:0, outputPerMTok:0};
+  const cost = tokIn/1e6*p.inputPerMTok + tokOut/1e6*p.outputPerMTok;
+  return {
+    elapsed: upto, steps: done.length,
+    tokens: tokIn + tokOut,
+    cost,
+    fails: done.filter(s=>s.status==='error').length
+  };
+}
+
+function renderMeta(){
+  $('meta').innerHTML =
+    `<code>${esc(TRACE.runId)}</code> · ${esc(TRACE.agent)} · ${esc(TRACE.model)}<br>${esc(TRACE.task||'')}`;
+}
+
+function renderCards(m){
+  const c = [
+    {k:'elapsed', v:fmtS(m.elapsed), u:'', hot:false},
+    {k:'steps',   v:m.steps, u:`/ ${TRACE.spans.length}`, hot:false},
+    {k:'tokens',  v:fmtN(m.tokens), u:'', hot:false},
+    {k:'cost',    v:'$'+m.cost.toFixed(4), u:'', hot:false},
+    {k:'failures',v:m.fails, u:'', hot:m.fails>0},
+  ];
+  $('cards').innerHTML = c.map(x=>
+    `<div class="card${x.hot?' hot':''}"><div class="k">${x.k}</div>
+     <div class="v">${x.v}<span class="u">${x.u}</span></div></div>`).join('');
+}
+
+function renderRuler(){
+  const T = TRACE.totalMs;
+  $('ruler').innerHTML = [0,.25,.5,.75,1].map(f=>
+    `<span>${fmtS(Math.round(T*f))}</span>`).join('');
+}
+
+function renderRows(){
+  const T = TRACE.totalMs;
+  const maxTok = Math.max(...TRACE.spans.map(s=>s.tokens.in+s.tokens.out), 1);
+  const rows = TRACE.spans.map((s,i)=>{
+    const w = dur(s)/T*100, l = s.startMs/T*100;
+    const share = (s.tokens.in+s.tokens.out)/maxTok;
+    const started = s.startMs <= t;
+    const cur = started && s.endMs > t;
+    const finished = s.endMs <= t;
+    let c = cls(s);
+    if (s.status==='ok' && i>0 && TRACE.spans[i-1].status==='error') c='warn';
+    const base = cmpx ? BASELINE.spans[i] : null;
+    const bad = base && (base.status!==s.status || Math.abs(dur(base)-dur(s))>1500);
+    return `<div class="row">
+      <div class="track"></div>
+      <div class="bar ${c}${started?'':' dim'}${cur?' cur':''}${sel===s.id?' sel':''}${bad?' bad':''}"
+           style="left:${l}%;width:${Math.max(w,0.7)}%" data-id="${s.id}"
+           title="${esc(s.name)} · ${fmtS(dur(s))} · ${s.tokens.in+s.tokens.out} tok">
+        <div class="tk" style="width:${Math.max(share*100,2)}%"></div>
+        <span class="lb">${esc(s.name)}</span>
+      </div>
+    </div>`;
+  }).join('');
+  $('rows').innerHTML = rows;
+  $('rows').querySelectorAll('.bar').forEach(el=>{
+    el.onclick = ()=>{ sel = el.dataset.id; stop(); render(); showDetail(TRACE.spans.find(s=>s.id===sel)); };
+  });
+  $('cursor').style.display = (playing||t>0) ? 'block' : 'none';
+  $('cursor').style.left = Math.min(t/TRACE.totalMs*100, 100) + '%';
+}
+
+function showDetail(s){
+  if(!s){ $('dbody').innerHTML = '<div class="empty">点击任意 span，或按 Replay 开始回放</div>'; return; }
+  const base = cmpx ? BASELINE.spans[TRACE.spans.indexOf(s)] : null;
+  let delta = '';
+  if (base){
+    const dd = dur(s)-dur(base), dt = (s.tokens.in+s.tokens.out)-(base.tokens.in+base.tokens.out);
+    delta = `<div class="lbl">vs baseline</div><pre>${dd===0?'duration identical':(dd<0?`faster by ${fmtS(-dd)}`:`slower by ${fmtS(dd)}`)} · ${dt===0?'same tokens':(dt<0?`${fmtN(-dt)} fewer tokens`:`${fmtN(dt)} more tokens`)}</pre>`;
+  }
+  $('dbody').innerHTML = `
+    <div class="dh">
+      <span class="pill ${cls(s)}">${s.status==='error'?'FAILED':s.kind.toUpperCase()}</span>
+      <span class="dname">${esc(s.name)}</span>
+    </div>
+    <div class="dmeta">
+      <div class="dm"><div class="k">duration</div><div class="v">${fmtS(dur(s))}</div></div>
+      <div class="dm"><div class="k">at</div><div class="v">${fmtS(s.startMs)}</div></div>
+      <div class="dm"><div class="k">tokens in</div><div class="v">${fmtN(s.tokens.in)}</div></div>
+      <div class="dm"><div class="k">tokens out</div><div class="v">${fmtN(s.tokens.out)}</div></div>
+    </div>
+    <div class="lbl">input</div><pre>${esc(s.input)}</pre>
+    <div class="lbl">output</div><pre>${esc(s.output)}</pre>
+    ${s.error?`<div class="lbl">error</div><pre class="err">${esc(s.error)}</pre>`:''}
+    ${delta}`;
+}
+
+function render(){
+  renderCards(metrics(t));
+  renderRows();
+  $('pbar').style.width = Math.min(t/TRACE.totalMs*100,100)+'%';
+  $('clock').textContent = `${fmtS(t)} / ${fmtS(TRACE.totalMs)}`;
+}
+
+function tick(ts){
+  if(!playing) return;
+  if(!last) last = ts;
+  const dt = (ts-last)*speed; last = ts;
+  t = Math.min(t+dt, TRACE.totalMs);
+  render();
+  const cur = TRACE.spans.filter(s=>s.startMs<=t).pop();
+  if (cur) { sel = cur.id; showDetail(cur); }
+  if (t >= TRACE.totalMs){ stop(); return; }
+  raf = requestAnimationFrame(tick);
+}
+function play(){
+  if (t >= TRACE.totalMs) t = 0;
+  playing = true; last = 0; $('play').textContent = '❚❚ Pause';
+  raf = requestAnimationFrame(tick);
+}
+function stop(){
+  playing = false; last = 0; $('play').textContent = '▶ Replay';
+  if(raf) cancelAnimationFrame(raf);
+}
+
+$('play').onclick = ()=> playing ? stop() : play();
+$('reset').onclick = ()=>{ stop(); t=0; sel=null; render(); showDetail(null); };
+$('cmpx').onchange = e=>{ cmpx = e.target.checked; render(); if(sel) showDetail(TRACE.spans.find(s=>s.id===sel)); };
+[1,2,4].forEach(v=>{
+  const b = document.createElement('button');
+  b.textContent = v+'x'; b.className = v===1?'on':'';
+  b.onclick = ()=>{ speed=v; [...$('speed').children].forEach(x=>x.className=''); b.className='on'; };
+  $('speed').appendChild(b);
+});
+document.addEventListener('keydown', e=>{
+  if(e.code==='Space'){ e.preventDefault(); playing?stop():play(); }
+  if(e.code==='KeyR'){ $('reset').click(); }
+});
+
+// optional external trace: viewer/index.html?trace=path.json
+const q = new URLSearchParams(location.search).get('trace');
+if (q){
+  fetch(q).then(r=>r.json()).then(d=>{ TRACE=d; boot(); }).catch(()=>boot());
+} else boot();
+
+function boot(){ renderMeta(); renderRuler(); render(); showDetail(null); }
+</script>
+</body>
+</html>
